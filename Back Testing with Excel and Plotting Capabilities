@@ -1,0 +1,270 @@
+import MetaTrader5 as mt5
+import pandas as pd
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+import numpy as np
+from scipy.optimize import curve_fit
+import logging
+
+# Set up logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+
+# Initialize MT5 connection
+def initialize_mt5(account_no, password, server):
+    if not mt5.initialize(login=account_no, server=server, password=password):
+        logging.error(f"Failed to initialize MT5, error code: {mt5.last_error()}")
+        return False
+    logging.info("MT5 connection established successfully.")
+    return True
+
+# Function to fetch historical data and store prices
+def fetch_data(symbol, start_time, end_time, symbol_prices):
+    logging.info(f"Fetching data for {symbol} from {start_time} to {end_time}...")
+    try:
+        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M15, start_time, end_time)
+        if rates is None or len(rates) == 0:
+            raise ValueError(f"Error fetching data for {symbol}: {mt5.last_error()}")
+
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        symbol_prices[symbol] = df['close']
+        logging.info(f"Fetched {len(df)} data points for {symbol}.")
+        return df
+    except Exception as e:
+        logging.error(f"Exception occurred while fetching data for {symbol}: {e}")
+        return None
+
+# Function to calculate percentage difference between previous and current candle
+def calculate_percentage_difference_previous_candle(df):
+    df['prev_pct_diff'] = df['close'].pct_change(periods=1) * 100
+    return df
+
+# Sinusoidal function definition with amplitude, frequency, phase, vertical shift, and linear trend
+def sin_func(x, a, b, c, d, e):
+    return a * np.sin(b * x + c) + d + e * x
+
+# Responsive chart with Plotly for percentage difference
+def plot_percentage_difference(percentage_data, symbols):
+    fig = go.Figure()
+
+    for symbol, prev_pct_diff in percentage_data.items():
+        fig.add_trace(go.Scatter(
+            x=prev_pct_diff.index,
+            y=prev_pct_diff,
+            mode='lines',
+            name=f'{symbol} Previous Candle % Difference'
+        ))
+
+    fig.update_layout(
+        title=f'Percentage Difference between Previous and Current Candle ({symbols[0]} vs {symbols[1]})',
+        xaxis_title='Time',
+        yaxis_title='Percentage Change (%)',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        template='plotly_white'
+    )
+
+    logging.info("Displaying the interactive Plotly chart for percentage difference.")
+    fig.show()
+
+# Plot profit and loss curves
+def plot_profit_curves(trades):
+    cumulative_profit = []
+    individual_profits = []
+    vault_balance = []  # To store the vault balance over time
+    timestamps = []
+
+    total_profit = 0
+    vault = 0  # Initialize vault
+    for trade in trades:
+        profit = trade.get('profit', 0)
+        total_profit += profit
+        cumulative_profit.append(total_profit)
+        individual_profits.append(profit)
+
+        # Append the current vault balance after each trade
+        vault_balance.append(vault)
+
+        # Use the exit time if available, otherwise default to None
+        timestamps.append(trade.get('exit_time', None))
+
+        # Update the vault balance with vault savings after each trade
+        vault += trade.get('vault_savings', 0)
+
+    # Create a figure with Plotly
+    fig = go.Figure()
+
+    # Plot cumulative profit curve
+    fig.add_trace(go.Scatter(
+        x=timestamps,
+        y=cumulative_profit,
+        mode='lines+markers',
+        name='Cumulative Profit'
+    ))
+
+    # Plot individual trade profits
+    fig.add_trace(go.Scatter(
+        x=timestamps,
+        y=individual_profits,
+        mode='lines+markers',
+        name='Profit per Position'
+    ))
+
+    # Plot vault balance
+    fig.add_trace(go.Scatter(
+        x=timestamps,
+        y=vault_balance,
+        mode='lines+markers',
+        name='Vault Balance',
+        line=dict(dash='dash')  # Optional: make the vault line dashed to distinguish it
+    ))
+
+    fig.update_layout(
+        title='Profit and Loss Curves',
+        xaxis_title='Time',
+        yaxis_title='Amount (Profit/Vault Balance)',
+        template='plotly_white'
+    )
+
+    logging.info("Displaying the profit and loss curves along with vault balance.")
+    fig.show()
+
+
+
+# Backtest trading strategy and export results to Excel
+def backtest_trading_strategy(difference, symbol_prices, initial_capital, margin, leverage, reinvestment_ratio=0.2,
+                              vault_ratio=0.8):
+    trades = []
+    position_open = False
+    capital = initial_capital  # Start with the initial capital
+    vault = 0  # Vault for saving profits
+    total_profit = 0
+
+    for i in range(1, len(difference)):
+        try:
+            # Recalculate the amount of capital to invest per position dynamically (1% of current capital)
+            capital_per_trade = capital * 0.01
+
+            diff = difference.iloc[i]
+            prev_diff = difference.iloc[i - 1]
+
+            # Check entry condition
+            if not position_open and (diff > 0.2 or diff < -0.2):
+                entry_price_btc = symbol_prices['BTCUSD'].iloc[i]
+                entry_price_eth = symbol_prices['LTCUSD'].iloc[i]
+
+                btc_to_trade = (capital_per_trade * leverage) / entry_price_btc
+                eth_to_trade = (capital_per_trade * leverage) / entry_price_eth
+
+                trade_type = 'LONG BTC, SHORT ETH' if diff < -0.2 else 'SHORT BTC, LONG ETH'
+                trades.append({
+                    'entry_time': difference.index[i],
+                    'entry_diff': diff,
+                    'trade_type': trade_type,
+                    'btc_to_trade': btc_to_trade,
+                    'eth_to_trade': eth_to_trade,
+                    'entry_price_btc': entry_price_btc,
+                    'entry_price_eth': entry_price_eth
+                })
+                position_open = True
+                logging.info(f"Trade entered: {trade_type} at {difference.index[i]} with BTC: {btc_to_trade}, ETH: {eth_to_trade}")
+
+            # Check exit condition
+            elif position_open and prev_diff * diff <= 0:  # Crosses zero line
+                trade = trades[-1]
+                exit_price_btc = symbol_prices['BTCUSD'].iloc[i]
+                exit_price_eth = symbol_prices['LTCUSD'].iloc[i]
+
+                # Calculate profit based on the exit price difference
+                profit = 0.002 * (capital_per_trade * leverage)
+
+                # Deduct 50% as trading charges
+                trading_charge = profit * 0.50
+                profit_after_fee = profit - trading_charge
+
+                reinvestment = profit_after_fee * reinvestment_ratio  # 20% reinvested
+                vault_savings = profit_after_fee * vault_ratio  # 80% saved to vault
+
+                capital += reinvestment  # Reinvest the profit, increasing capital
+                vault += vault_savings  # Save the vault portion
+
+                total_profit += profit_after_fee
+
+                trade.update({
+                    'exit_time': difference.index[i],
+                    'exit_diff': diff,
+                    'exit_price_btc': exit_price_btc,
+                    'exit_price_eth': exit_price_eth,
+                    'profit': profit_after_fee,
+                    'reinvestment': reinvestment,
+                    'vault_savings': vault_savings,
+                    'updated_capital': capital,  # Store the updated capital
+                    'vault_balance': vault  # Store the vault balance
+                })
+
+                position_open = False
+                logging.info(
+                    f"Trade exited: {trade['trade_type']} at {difference.index[i]} with Profit after Fee: {profit_after_fee:.2f}")
+                logging.info(f"Reinvestment: {reinvestment:.2f}, Vault Savings: {vault_savings:.2f}")
+                logging.info(f"Updated Capital: {capital:.2f}, Vault Balance: {vault:.2f}")
+
+        except Exception as e:
+            logging.error(f"Exception during backtesting at index {i}: {e}")
+
+    logging.info(f"Backtest complete. Total Profit: {total_profit:.2f} on initial capital {initial_capital} ({total_profit / initial_capital * 100:.2f}%)")
+    logging.info(f"Final Capital: {capital}, Vault Balance: {vault}")
+
+    # Export trades to Excel
+    try:
+        trades_df = pd.DataFrame(trades)
+        trades_df.to_excel("backtest_report.xlsx", index=False)
+        logging.info("Backtest report exported to backtest_report.xlsx.")
+    except Exception as e:
+        logging.error(f"Error exporting backtest report to Excel: {e}")
+
+    return trades, total_profit, capital, vault
+
+# Main execution
+if __name__ == "__main__":
+    account_no = 190669726
+    password = "Password@69"
+    server = "Exness-MT5Trial14"
+
+    if not initialize_mt5(account_no, password, server):
+        quit()
+
+    symbols = ["BTCUSD", "LTCUSD"]
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=500)
+
+    percentage_data = {}
+    symbol_prices = {}
+
+    for symbol in symbols:
+        data = fetch_data(symbol, start_time, end_time, symbol_prices)
+        if data is not None:
+            data = calculate_percentage_difference_previous_candle(data)
+            percentage_data[symbol] = data['prev_pct_diff']
+
+    plot_percentage_difference(percentage_data, symbols)
+
+    difference = percentage_data[symbols[0]] - percentage_data[symbols[1]]
+    trades, total_profit, updated_capital, vault_balance = backtest_trading_strategy(difference, symbol_prices,
+                                                                                     initial_capital=300, margin=100,
+                                                                                     leverage=400)
+
+    # Plot profit curves
+    plot_profit_curves(trades)
+
+    mt5.shutdown()
+    logging.info(f"Backtest complete. Total Profit: {total_profit:.2f}, Final Capital: {updated_capital:.2f}, Vault Balance: {vault_balance:.2f}")

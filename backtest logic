@@ -1,0 +1,158 @@
+import MetaTrader5 as mt5
+import pandas as pd
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+import numpy as np
+from scipy.optimize import curve_fit
+import logging
+
+# Set up logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+
+# Initialize MT5 connection
+def initialize_mt5(account_no, password, server):
+    if not mt5.initialize(login=account_no, server=server, password=password):
+        logging.error(f"Failed to initialize MT5, error code: {mt5.last_error()}")
+        return False
+    logging.info("MT5 connection established successfully.")
+    return True
+
+# Function to fetch historical data and store prices
+def fetch_data(symbol, start_time, end_time, symbol_prices):
+    logging.info(f"Fetching data for {symbol} from {start_time} to {end_time}...")
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, start_time, end_time)
+
+    if rates is None or len(rates) == 0:
+        logging.error(f"Error fetching data for {symbol}: {mt5.last_error()}")
+        return None
+
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    symbol_prices[symbol] = df['close']
+    logging.info(f"Fetched {len(df)} data points for {symbol}.")
+    return df
+
+# Function to calculate percentage difference between previous and current candle
+def calculate_percentage_difference_previous_candle(df):
+    df['prev_pct_diff'] = df['close'].pct_change(periods=1) * 100
+    return df
+
+# Sinusoidal function definition with amplitude, frequency, phase, vertical shift, and linear trend
+def sin_func(x, a, b, c, d, e):
+    return a * np.sin(b * x + c) + d + e * x
+
+# Responsive chart with Plotly for percentage difference
+def plot_percentage_difference(percentage_data, symbols):
+    fig = go.Figure()
+
+    for symbol, prev_pct_diff in percentage_data.items():
+        fig.add_trace(go.Scatter(
+            x=prev_pct_diff.index,
+            y=prev_pct_diff,
+            mode='lines',
+            name=f'{symbol} Previous Candle % Difference'
+        ))
+
+    fig.update_layout(
+        title=f'Percentage Difference between Previous and Current Candle ({symbols[0]} vs {symbols[1]})',
+        xaxis_title='Time',
+        yaxis_title='Percentage Change (%)',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        template='plotly_white'
+    )
+
+    logging.info("Displaying the interactive Plotly chart for percentage difference.")
+    fig.show()
+
+# Function to calculate and backtest based on the difference logic
+def backtest_trading_strategy(difference, symbol_prices, capital, margin, leverage):
+    trades = []
+    position_open = False
+    total_profit = 0
+
+    for i in range(1, len(difference)):
+        diff = difference.iloc[i]
+        prev_diff = difference.iloc[i - 1]
+
+        # Check entry condition
+        if not position_open and (diff > 0.2 or diff < -0.2):
+            entry_price_btc = symbol_prices['BTCUSD'].iloc[i]
+            entry_price_eth = symbol_prices['ETHUSD'].iloc[i]
+
+            btc_to_trade = (margin * leverage / 2) / entry_price_btc
+            eth_to_trade = (margin * leverage / 2) / entry_price_eth
+
+            trade_type = 'LONG BTC, SHORT ETH' if diff < -0.2 else 'SHORT BTC, LONG ETH'
+            trades.append({
+                'entry_time': difference.index[i],
+                'entry_diff': diff,
+                'trade_type': trade_type,
+                'btc_to_trade': btc_to_trade,
+                'eth_to_trade': eth_to_trade,
+                'entry_price_btc': entry_price_btc,
+                'entry_price_eth': entry_price_eth
+            })
+            position_open = True
+
+        # Check exit condition
+        elif position_open and prev_diff * diff <= 0:  # Crosses zero line
+            trade = trades[-1]
+            exit_price_btc = symbol_prices['BTCUSD'].iloc[i]
+            exit_price_eth = symbol_prices['ETHUSD'].iloc[i]
+
+            profit = 0.002 * (margin * leverage)  # Assume 0.2% profit of total leveraged amount
+            total_profit += profit
+
+            trade.update({
+                'exit_time': difference.index[i],
+                'exit_diff': diff,
+                'exit_price_btc': exit_price_btc,
+                'exit_price_eth': exit_price_eth,
+                'profit': profit
+            })
+
+            position_open = False
+
+    logging.info(f"Total Profit: {total_profit} on initial capital {capital} ({total_profit / capital * 100:.2f}%)")
+    return trades, total_profit
+
+# Main execution
+if __name__ == "__main__":
+    account_no = 190669726
+    password = "Password@69"
+    server = "Exness-MT5Trial14"
+
+    if not initialize_mt5(account_no, password, server):
+        quit()
+
+    symbols = ["BTCUSD", "ETHUSD"]
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=500)
+
+    percentage_data = {}
+    symbol_prices = {}
+
+    for symbol in symbols:
+        data = fetch_data(symbol, start_time, end_time, symbol_prices)
+        if data is not None:
+            data = calculate_percentage_difference_previous_candle(data)
+            percentage_data[symbol] = data['prev_pct_diff']
+
+    plot_percentage_difference(percentage_data, symbols)
+
+    difference = percentage_data[symbols[0]] - percentage_data[symbols[1]]
+    trades, total_profit = backtest_trading_strategy(difference, symbol_prices, capital=10000, margin=100, leverage=400)
+
+    mt5.shutdown()
+    logging.info(f"Backtest complete. Total Profit: {total_profit:.2f}")

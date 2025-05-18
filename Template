@@ -1,0 +1,202 @@
+import MetaTrader5 as mt5
+import pandas as pd
+from datetime import datetime, timedelta
+import mplfinance as mpf
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+
+
+# Initialize MT5 connection
+def initialize_mt5(account_no, password, server):
+    if not mt5.initialize(login=account_no, server=server, password=password):
+        print("Failed to initialize MT5, error code:", mt5.last_error())
+        return False
+    print("MT5 connection established successfully.")
+    return True
+
+
+# Function to fetch historical data
+def fetch_data(symbol, start_time, end_time):
+    print(f"Fetching data for {symbol} from {start_time} to {end_time}...")
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H8, start_time, end_time)
+
+    if rates is None:
+        print(f"Error fetching data for {symbol}: {mt5.last_error()}")
+        return None
+
+    if len(rates) == 0:
+        print(f"No data found for {symbol}.")
+        return None
+
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    print(f"Fetched {len(df)} data points for {symbol}.")
+    return df
+
+
+# Function to add moving averages
+def add_moving_averages(df, window):
+    return df['close'].rolling(window=window).mean()
+
+
+# Function to calculate percentage difference between previous and current candle
+def calculate_percentage_difference_previous_candle(df):
+    df['prev_pct_diff'] = df['close'].pct_change(periods=1) * 100  # Convert to percentage
+    return df
+
+
+# Function to detect percentage crosses
+def detect_crossings(btc_pct_diff, eth_pct_diff):
+    crossings = []
+    for i in range(1, len(btc_pct_diff)):
+        if (btc_pct_diff[i - 1] < eth_pct_diff[i - 1] and btc_pct_diff[i] > eth_pct_diff[i]) or \
+                (btc_pct_diff[i - 1] > eth_pct_diff[i - 1] and btc_pct_diff[i] < eth_pct_diff[i]):
+            crossings.append((btc_pct_diff.index[i], btc_pct_diff[i], eth_pct_diff[i]))
+    return crossings
+
+
+# Function to plot candlestick chart with Plotly
+def plot_candlestick(data, symbol):
+    fig = go.Figure()
+
+    # Candlestick chart
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name=f"{symbol} Candlestick"
+    ))
+
+    # Moving averages
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['SMA_20'],
+        mode='lines',
+        name='SMA 20',
+        line=dict(color='blue', width=1.5)
+    ))
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['SMA_50'],
+        mode='lines',
+        name='SMA 50',
+        line=dict(color='orange', width=1.5)
+    ))
+
+    # Layout settings for candlestick chart
+    fig.update_layout(
+        title=f'{symbol} Trading Chart with Moving Averages',
+        xaxis=dict(
+            rangeslider=dict(visible=True),
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            )
+        ),
+        yaxis=dict(title='Price'),
+        template='plotly_dark'
+    )
+
+    fig.show()
+
+
+# Responsive chart with Plotly for percentage difference
+def plot_percentage_difference(percentage_data, btc_crossings, eth_crossings):
+    fig = go.Figure()
+    for symbol, prev_pct_diff in percentage_data.items():
+        fig.add_trace(go.Scatter(
+            x=prev_pct_diff.index,
+            y=prev_pct_diff,
+            mode='lines',
+            name=f'{symbol} Previous Candle % Difference'
+        ))
+
+    # Mark the crossing points (BTC crosses ETH)
+    for crossing in btc_crossings:
+        fig.add_trace(go.Scatter(
+            x=[crossing[0]],
+            y=[crossing[1]],
+            mode='markers',
+            marker=dict(color='red', size=10),
+            name=f"BTC Crosses ETH at {crossing[0]}",
+            text=f"BTC: {crossing[1]:.2f}%, ETH: {crossing[2]:.2f}%"
+        ))
+
+    # Set titles and layout for percentage difference chart
+    fig.update_layout(
+        title='Percentage Difference between Previous and Current Candle (8 hr)',
+        xaxis_title='Time',
+        yaxis_title='Percentage Change (%)',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        template='plotly_white'
+    )
+
+    print("Displaying the interactive Plotly chart for percentage difference with BTC-ETH cross points.")
+    fig.show()
+
+
+# Main execution
+if __name__ == "__main__":
+    # Manually set your credentials here
+    account_no = 190669726  # Replace with your actual account number
+    password = "Password@69"  # Replace with your actual password
+    server = "Exness-MT5Trial14"  # Replace with your actual server
+
+    if not initialize_mt5(account_no, password, server):
+        quit()
+
+    # Define symbols and time range
+    symbols = ["BTCUSD", "ETHUSD"]
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=730)  # Fetch data for the last 2 years
+
+    # Create a list to hold data for percentage difference plotting
+    percentage_data = {}
+    btc_crossings = []
+    eth_crossings = []
+
+    for symbol in symbols:
+        data = fetch_data(symbol, start_time, end_time)
+        if data is not None:
+            # Add moving averages
+            data['SMA_20'] = add_moving_averages(data, window=20)
+            data['SMA_50'] = add_moving_averages(data, window=50)
+
+            # Plot candlestick chart with moving averages
+            plot_candlestick(data, symbol)
+
+            # Calculate percentage difference between previous and current candle
+            data = calculate_percentage_difference_previous_candle(data)
+            percentage_data[symbol] = data['prev_pct_diff']
+
+    # Detect BTC and ETH percentage crosses
+    btc_pct_diff = percentage_data["BTCUSD"]
+    eth_pct_diff = percentage_data["ETHUSD"]
+    btc_crossings = detect_crossings(btc_pct_diff, eth_pct_diff)
+
+    # Plot percentage difference chart with crossing points
+    plot_percentage_difference(percentage_data, btc_crossings, eth_crossings)
+
+    # Block matplotlib plots to keep them open until closed manually
+    print("Close all matplotlib plots to exit.")
+    plt.show(block=True)
+
+    # Shutdown MT5 connection
+    mt5.shutdown()

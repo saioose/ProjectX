@@ -1,0 +1,123 @@
+import time
+import pandas as pd
+import MetaTrader5 as mt5
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from datetime import datetime, timezone, timedelta
+
+# Path to the CSV file
+csv_file_path = "./helix_data.csv"
+
+# Function to convert timestamp to Indian Standard Time (IST)
+def convert_to_ist(timestamp):
+    try:
+        utc_time = datetime.fromtimestamp(timestamp / 1000.0, tz=timezone.utc)
+        ist_time = utc_time.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        return ist_time.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        print(f"Error converting timestamp: {e}")
+        return "Invalid Timestamp"
+
+# Function to place orders
+def place_order(symbol, action, lot_size):
+    if action == "buy":
+        price = mt5.symbol_info_tick(symbol).ask
+        order_type = mt5.ORDER_TYPE_BUY
+    elif action == "sell":
+        price = mt5.symbol_info_tick(symbol).bid
+        order_type = mt5.ORDER_TYPE_SELL
+    else:
+        print("Invalid action.")
+        return
+
+    order = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot_size,
+        "price": price,
+        "slippage": 10,
+        "deviation": 10,
+        "type": order_type,
+        "magic": 234000,
+        "comment": f"{action.capitalize()} order via Python",
+        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_time": mt5.ORDER_TIME_GTC
+    }
+
+    result = mt5.order_send(order)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"Order failed with code {result.retcode}.")
+    else:
+        print(f"Order placed: {action.capitalize()} {lot_size} lots of {symbol}.")
+
+# Custom event handler for monitoring file changes
+class CSVEventHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if event.src_path.endswith("helix_data.csv"):
+            try:
+                # Read the CSV file and fetch the last row
+                df = pd.read_csv(csv_file_path)
+
+                # If the CSV is empty, skip processing
+                if df.empty:
+                    print("CSV file is empty.")
+                    return
+
+                # Fetch the last row
+                latest_row = df.iloc[-1]
+
+                # Extract values
+                try:
+                    timestamp = int(latest_row["timestamp"])
+                except ValueError:
+                    print("Invalid timestamp value in the CSV file.")
+                    return
+
+                helix_15m = latest_row["helix15m"]
+                helix_1h = latest_row["helix1h"]
+
+                # Convert timestamp to IST
+                ist_time = convert_to_ist(timestamp)
+
+                # Log values to the console
+                print(f"Timestamp (IST): {ist_time}, Helix15m: {helix_15m}, Helix1h: {helix_1h}")
+
+                # Place trades based on Helix15m value
+                if helix_15m > 0.01:
+                    print("Action: Short BTC(0.01), Long ETH(0.29)")
+                    place_order("BTCUSD", "sell", 0.01)
+                    place_order("ETHUSD", "buy", 0.29)
+                elif helix_15m < -0.02:
+                    print("Action: Long BTC(0.01), Short ETH(0.29)")
+                    place_order("BTCUSD", "buy", 0.01)
+                    place_order("ETHUSD", "sell", 0.29)
+
+            except pd.errors.EmptyDataError:
+                print("CSV file is empty or invalid.")
+            except FileNotFoundError:
+                print("CSV file not found.")
+            except Exception as e:
+                print(f"Error processing the file: {e}")
+
+# Set up watchdog observer
+if __name__ == "__main__":
+    # Initialize MetaTrader 5 connection
+    if not mt5.initialize():
+        print("MT5 initialization failed.")
+        exit()
+
+    event_handler = CSVEventHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path=".", recursive=False)
+
+    print("Monitoring CSV file for changes...")
+    try:
+        observer.start()
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+    # Shutdown MetaTrader 5 connection when done
+    mt5.shutdown()

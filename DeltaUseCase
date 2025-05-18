@@ -1,0 +1,13 @@
+If Difference is negative enter BTCLONG and ETHSHORTin the avg price ratio of btc/eth, example if btc is 100k and eth is 10k while entering the trade then for 1btc 
+take 10ETH , if btc is long, then short eth and if btc is short, long eth , Difference should be atleasst +0.2% or -0.2% while entering the trade.  If the difference is positive
+enter BTCSHORT and ETHLONG, With the same position sizing(ratio of long short) as when the difference is negative.
+If im using 10k as total capital my margin use 100$ for every trade, and use 400x leverage, which means we have 100*400= 40000$ for opening the position, now we have
+to use 50% of this to long and 50% of this to short, using the above example where the difference is negative, we will enter BTCLONG(BTC price 100k) with 50% of the 
+total which is 20000$, so we will long 0.2BTC and with the other 50% which is the other 20000$ we will short 2ETH. 
+When the diference line crosses 0 exit the trade, this should give 0.2% profit gain in the position = 0.2% of 40000$ = 80$, so for 100$ margin on 400x leverage this 
+should be = 80% and on my total capital of 10K this thould be (80/10000) *100 = 0.8%
+
+
+##for backtest we have assumed that whenever the difference has crossed 0 line and reached any of the point >0.2% we have entered the trade, and when it has crossed
+back to 0 we have exited the trade. Whenever we find any point with difference greater than 0.2%, we treat this as entry and whenever the difference crosses 0 after the 
+0.2% entry point we treat that as exit. Whenever 1 such cycle is complete we treat that as profit 0.8% on the total capital. 

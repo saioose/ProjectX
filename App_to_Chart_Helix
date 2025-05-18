@@ -1,0 +1,90 @@
+from flask import Flask, jsonify, render_template
+import pandas as pd
+import numpy as np
+
+app = Flask(__name__)
+
+# Function to simulate OHLC data for 15-minute and 1-hour timeframes
+def generate_candlestick_data(n_rows=5000):
+    try:
+        # Read the CSV file
+        df = pd.read_csv("helix_data.csv")
+
+        # Start from a fixed timestamp (using the first row timestamp or a given starting point)
+        initial_timestamp = int(df["timestamp"].iloc[0] / 1000)  # Convert to seconds
+        timestamp = initial_timestamp
+
+        # Generate 15-minute timeframe candlestick data
+        candlestick_data_15m = []
+        # Generate 1-hour timeframe candlestick data
+        candlestick_data_1h = []
+
+        for index, row in df.tail(n_rows).iterrows():
+            # Extracting helix15m and helix1h data
+            open_value_15m = row["helix15m"]
+            close_value_15m = row["helix15m"]
+            high_value_15m = open_value_15m + np.random.uniform(0.01, 0.1)
+            low_value_15m = open_value_15m - np.random.uniform(0.01, 0.1)
+
+            open_value_1h = row["helix1h"]
+            close_value_1h = row["helix1h"]
+            high_value_1h = open_value_1h + np.random.uniform(0.01, 0.1)
+            low_value_1h = open_value_1h - np.random.uniform(0.01, 0.1)
+
+            # Increment timestamp by 1 second for each new row (use same timestamp for both charts)
+            timestamp += 1
+
+            # Check for valid data and add to respective data lists
+            if any(v is None for v in [open_value_15m, close_value_15m, high_value_15m, low_value_15m, open_value_1h, close_value_1h, high_value_1h, low_value_1h, timestamp]):
+                print(f"Skipping invalid data at index {index}: helix15m={open_value_15m}, helix1h={open_value_1h}, timestamp={timestamp}")
+            else:
+                candlestick_data_15m.append({
+                    "time": timestamp,
+                    "open": open_value_15m,
+                    "high": high_value_15m,
+                    "low": low_value_15m,
+                    "close": close_value_15m,
+                    "sma": (open_value_15m + close_value_15m) / 2  # Simple Moving Average for 15m
+                })
+                candlestick_data_1h.append({
+                    "time": timestamp,
+                    "open": open_value_1h,
+                    "high": high_value_1h,
+                    "low": low_value_1h,
+                    "close": close_value_1h,
+                    "sma": (open_value_1h + close_value_1h) / 2  # Simple Moving Average for 1h
+                })
+
+        # Debugging: Show the first 5 valid data points for each timeframe
+        print("Generated 15-Min Candlestick Data Sample:", candlestick_data_15m[:5])
+        print("Generated 1-Hour Candlestick Data Sample:", candlestick_data_1h[:5])
+
+        return candlestick_data_15m, candlestick_data_1h
+
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return [], []
+
+# Endpoint to fetch candlestick data
+@app.route("/get_candlestick_data", methods=["GET"])
+def get_candlestick_data():
+    data_15m, data_1h = generate_candlestick_data()
+    if data_15m and data_1h:
+        return jsonify({
+            "candlestick_data_15m": data_15m,
+            "candlestick_data_1h": data_1h
+        })
+    return jsonify({"error": "No data found"}), 404
+
+# Route to serve favicon (to prevent 404 errors)
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+# Serve the frontend
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+if __name__ == "__main__":
+    app.run(debug=True)

@@ -1,0 +1,126 @@
+const WebSocket = require('ws'); // WebSocket library
+const sqlite3 = require('sqlite3').verbose();
+const axios = require('axios');
+
+// Open SQLite database
+const db = new sqlite3.Database('klines.db', (err) => {
+    if (err) {
+        console.error('Error opening database:', err.message);
+    } else {
+        console.log('Connected to the SQLite database.');
+    }
+});
+
+// Ensure the table exists before trying to insert data
+db.serialize(() => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ohlc_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            open_time INTEGER,
+            close_time INTEGER,
+            interval TEXT,
+            open_price REAL,
+            high_price REAL,
+            low_price REAL,
+            close_price REAL,
+            volume REAL,
+            number_of_trades INTEGER,
+            quote_asset_volume REAL,
+            is_final BOOLEAN,
+            V REAL,
+            Q REAL,
+            B INTEGER
+        )
+    `, (err) => {
+        if (err) {
+            console.error('Error creating table:', err.message);
+        } else {
+            console.log('Table created or already exists.');
+        }
+    });
+});
+
+// Function to fetch the last 2 1-minute klines from Binance
+async function fetchKlines() {
+    try {
+        const response = await axios.get('https://api.binance.com/api/v3/klines', {
+            params: {
+                symbol: 'BTCUSDT',
+                interval: '1m',
+                limit: 2
+            }
+        });
+
+        const klines = response.data;
+
+        // Extract previous and current kline
+        const previousKline = klines[0];
+        const currentKline = klines[1];
+
+        console.log('Previous kline:', previousKline);
+        console.log('Current kline:', currentKline);
+
+        // Insert previous kline into the database
+        const insertQuery = `
+            INSERT INTO ohlc_data (
+                symbol, open_time, close_time, interval, open_price, high_price, 
+                low_price, close_price, volume, number_of_trades, quote_asset_volume, 
+                is_final, V, Q, B
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        
+        db.run(insertQuery, [
+            'BTCUSDT', previousKline[0], previousKline[6], '1m', previousKline[1], previousKline[2], 
+            previousKline[3], previousKline[4], previousKline[5], previousKline[8], previousKline[7], 
+            previousKline[9], previousKline[10], previousKline[11], previousKline[12]
+        ], (err) => {
+            if (err) {
+                console.error('Error inserting previous kline into database:', err.message);
+            } else {
+                console.log('Previous kline data inserted into database.');
+                // After inserting, print the current database content
+                printDatabase();
+                // Fetch the close_time of the last inserted kline and set the timer
+                setTimerForNextFetch(previousKline[6]);
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching klines from Binance:', error);
+    }
+}
+
+// Function to print the current contents of the database
+function printDatabase() {
+    db.all("SELECT * FROM ohlc_data", [], (err, rows) => {
+        if (err) {
+            console.error('Error reading database:', err.message);
+        } else {
+            console.log('Database contents:');
+            rows.forEach((row) => {
+                console.log(row);
+            });
+        }
+    });
+}
+
+// Function to set the timer for the next fetch based on the close_time
+function setTimerForNextFetch(closeTime) {
+    // Add 60 seconds to the close_time to calculate the next fetch time
+    const nextFetchTime = closeTime + 60000; // Adding 1 minute (60,000 milliseconds)
+    
+    const currentTime = Date.now();
+    const remainingTime = nextFetchTime - currentTime;
+
+    // If the time has already passed, just fetch immediately
+    const timeToNextFetch = remainingTime <= 0 ? 60000 : remainingTime;
+
+    console.log(`Next fetch will occur in ${timeToNextFetch / 1000} seconds.`);
+
+    // Set the timer to fetch data after the calculated time
+    setTimeout(fetchKlines, timeToNextFetch);
+}
+
+// Fetch the klines every minute, starting with the first fetch
+fetchKlines();

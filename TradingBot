@@ -1,0 +1,223 @@
+import time
+import pandas as pd
+import MetaTrader5 as mt5
+from datetime import datetime, timezone, timedelta
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Path to the CSV file
+csv_file_path = "./helix_data.csv"
+
+# Global dictionary to track positions by event ID
+opened_positions = {}
+event_id_counter = 0  # Incremental event ID for each signal
+
+# Flag to check if we are waiting for the Helix15m to cross zero
+waiting_for_reset = False
+
+# Initialize MT5 connection
+if not mt5.initialize():
+    print("MT5 initialization failed, error code:", mt5.last_error())
+    exit()
+
+# Login to your trading account
+account = 12345678  # Replace with your account number
+password = "your_password"  # Replace with your password
+server = "broker_server"  # Replace with your broker's server
+
+if not mt5.login(account, password, server):
+    print("Login failed, error code:", mt5.last_error())
+    mt5.shutdown()
+    exit()
+
+# Create DataFrame to store individual trade details (symbol, ticket, time, lot)
+trades_df = pd.DataFrame(columns=["event_id", "symbol", "ticket", "time", "lot"])
+
+# Function to convert timestamp to Indian Standard Time (IST)
+def convert_to_ist(timestamp):
+    try:
+        utc_time = datetime.fromtimestamp(timestamp / 1000.0, tz=timezone.utc)
+        ist_time = utc_time.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        return ist_time.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        print(f"Error converting timestamp: {e}")
+        return "Invalid Timestamp"
+
+# Function to place an order and return the ticket ID (position ID)
+from datetime import datetime
+
+def place_order(symbol, volume, signal_type):
+    order_type = mt5.ORDER_TYPE_BUY if signal_type == "long" else mt5.ORDER_TYPE_SELL
+    price = mt5.symbol_info_tick(symbol).ask if order_type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(symbol).bid
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type,
+        "price": price,
+        "deviation": 10,
+        "magic": 234000,
+        "comment": f"Helix Signal {signal_type}",
+        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+
+    # Send the order
+    order_result = mt5.order_send(request)
+
+    # Check if the order was successful
+    if order_result is None:
+        print(f"Error placing order for {symbol} {signal_type}. MT5 error code: {mt5.last_error()}")
+        return None
+
+    if order_result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"Error placing order: {order_result.comment}")
+        return None
+
+    # Log trade details into the DataFrame
+    trade_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Use current time
+    trade_data = {
+        "event_id": event_id_counter,
+        "symbol": symbol,
+        "ticket": order_result.order,
+        "time": trade_time,
+        "lot": volume,
+    }
+    global trades_df
+    trades_df = pd.concat([trades_df, pd.DataFrame([trade_data])], ignore_index=True)
+
+    # Print the DataFrame to the console after each trade
+    print(trades_df)
+
+    # Return the position ID (ticket)
+    return order_result.order
+
+
+# Function to fetch position PnL for a specific signal event
+def fetch_signal_pnls(event_id):
+    if event_id not in opened_positions:
+        return 0
+
+    event_positions = opened_positions[event_id]["positions"]
+    total_pnl = 0
+
+    positions_data = mt5.positions_get()
+    if positions_data is None:
+        print("No open positions found.")
+        return 0
+
+    # Check the PnL for each position associated with the signal event
+    for position in positions_data:
+        if position.ticket in event_positions:
+            total_pnl += position.profit  # Add PnL for the trade in the event
+
+    return total_pnl
+
+# Custom event handler for monitoring file changes
+class CSVEventHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        global waiting_for_reset, event_id_counter
+
+        if event.src_path.endswith("helix_data.csv"):
+            try:
+                # Read the CSV file and fetch the last row
+                df = pd.read_csv(csv_file_path)
+
+                # If the CSV is empty, skip processing
+                if df.empty:
+                    print("CSV file is empty.")
+                    return
+
+                # Fetch the last row
+                latest_row = df.iloc[-1]
+
+                # Extract values
+                try:
+                    timestamp = int(latest_row["timestamp"])
+                except ValueError:
+                    print("Invalid timestamp value in the CSV file.")
+                    return
+
+                helix_15m = latest_row["helix15m"]
+                helix_1h = latest_row["helix1h"]
+
+                # Convert timestamp to IST
+                ist_time = convert_to_ist(timestamp)
+
+                # Log values to the console
+                print(f"Timestamp (IST): {ist_time}, Helix15m: {helix_15m}, Helix1h: {helix_1h}")
+
+                # Monitor PnL for open positions
+                event_pnls = fetch_signal_pnls(event_id_counter)
+                print(f"Cumulative PnL for Signal Event {event_id_counter}: {event_pnls}")
+
+                # Check if we are waiting for reset of Helix15m to cross zero
+                if waiting_for_reset:
+                    if helix_15m == 0:
+                        print("Helix15m crossed back to 0, ready for new trade.")
+                        waiting_for_reset = False
+                    else:
+                        print("Waiting for Helix15m to cross zero.")
+
+                elif helix_15m > 0.01 and helix_15m != 0 and not waiting_for_reset:
+                    print("Action: Short BTC(0.01), Long ETH(0.29)")
+                    # Place trades
+                    position_id_btc = place_order("BTCUSD", 0.01, "short")
+                    position_id_eth = place_order("ETHUSD", 0.29, "long")
+                    if position_id_btc and position_id_eth:
+                        # Store the trades under a new event ID
+                        event_id_counter += 1
+                        opened_positions[event_id_counter] = {
+                            "positions": [position_id_btc, position_id_eth],
+                            "total_pnl": 0,  # Initial PnL is 0
+                        }
+
+                        # After placing the trade, wait for Helix15m to cross zero
+                        waiting_for_reset = True
+
+                elif helix_15m < -0.02 and helix_15m != 0 and not waiting_for_reset:
+                    print("Action: Long BTC(0.01), Short ETH(0.29)")
+                    # Place trades
+                    position_id_btc = place_order("BTCUSD", 0.01, "long")
+                    position_id_eth = place_order("ETHUSD", 0.29, "short")
+                    if position_id_btc and position_id_eth:
+                        # Store the trades under a new event ID
+                        event_id_counter += 1
+                        opened_positions[event_id_counter] = {
+                            "positions": [position_id_btc, position_id_eth],
+                            "total_pnl": 0,  # Initial PnL is 0
+                        }
+
+                        # After placing the trade, wait for Helix15m to cross zero
+                        waiting_for_reset = True
+
+            except pd.errors.EmptyDataError:
+                print("CSV file is empty or invalid.")
+            except FileNotFoundError:
+                print("CSV file not found.")
+            except Exception as e:
+                print(f"Error processing the file: {e}")
+
+
+# Set up watchdog observer
+if __name__ == "__main__":
+    event_handler = CSVEventHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path=".", recursive=False)
+
+    print("Monitoring CSV file for changes...")
+    try:
+        observer.start()
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+    # Shutdown connection after all tasks are completed
+    mt5.shutdown()
+
+    # Optionally, save the trades DataFrame to a CSV file for record-keeping
+    trades_df.to_csv("executed_trades.csv", index=False)
+    print("Executed trades saved to 'executed_trades.csv'.")

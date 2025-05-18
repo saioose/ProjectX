@@ -1,0 +1,158 @@
+import time
+import pandas as pd
+from datetime import datetime, timedelta
+import MetaTrader5 as mt5
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+# MT5 Connection
+if not mt5.initialize():
+    print("MT5 initialization failed")
+    quit()
+
+# Account Login
+login = 79552052  # Replace with your login
+password = "Password@69"  # Replace with your password
+server = "Exness-Mt5Trial8"  # Replace with your server
+if not mt5.login(login, password, server):
+    print("Login failed", mt5.last_error())
+    quit()
+
+# Symbol List
+symbols = ["BTCUSD", "ETHUSD"]
+for symbol in symbols:
+    if not mt5.symbol_select(symbol, True):
+        print(f"Failed to select {symbol}")
+
+# Data Storage
+price_data = {symbol: [] for symbol in symbols}
+columns = ["timestamp", "symbol", "open", "high", "low", "close"]
+csv_filename = "ohlc_data.csv"
+candles = []
+
+# Ensure the CSV file has a header
+try:
+    pd.read_csv(csv_filename)
+except FileNotFoundError:
+    pd.DataFrame(columns=columns).to_csv(csv_filename, index=False)
+except pd.errors.ParserError as e:
+    print(f"Error reading CSV file: {e}")
+    print("Reinitializing the CSV file.")
+    pd.DataFrame(columns=columns).to_csv(csv_filename, index=False)
+
+
+# Helper Function to Save OHLC Data to CSV
+def save_to_csv(data, filename):
+    try:
+        df = pd.DataFrame(data, columns=columns)
+        df.to_csv(filename, mode="a", header=False, index=False)
+        print(f"Successfully saved data to {filename}")
+    except Exception as e:
+        print(f"Error saving to CSV: {e}")
+
+
+# Initialize price_data for each symbol
+price_data = {symbol: [] for symbol in symbols}
+candles = []
+
+# Initialize candle data
+def initialize_candle(symbol, current_time):
+    """Initialize the first candle after collecting initial data"""
+    open_price = price_data[symbol][0]  # First price as open
+    high_price = max(price_data[symbol])  # Highest price in the first 15 seconds
+    low_price = min(price_data[symbol])  # Lowest price in the first 15 seconds
+    close_price = price_data[symbol][-1]  # Last price as close
+
+    candle = {
+        "timestamp": int(current_time.timestamp()),
+        "symbol": symbol,
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "close": close_price
+    }
+    return candle
+
+# Save candle data to CSV for each symbol
+def save_to_csv(candles, symbol):
+    """Save candle data to a CSV file for the specified symbol"""
+    df = pd.DataFrame(candles)
+    filename = f"{symbol}_ohlc_data.csv"  # Create a unique file for each symbol
+    df.to_csv(filename, index=False, mode='a', header=not pd.io.common.file_exists(filename))
+
+# Main Loop
+try:
+    start_time = datetime.now()
+    ohlc_data = []
+    while True:
+        current_time = datetime.now()
+        for symbol in symbols:
+            # Fetch live prices
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                print(f"Failed to get tick data for {symbol}")
+                continue
+
+            bid, ask = tick.bid, tick.ask
+            mid_price = (bid + ask) / 2
+
+            # Log tick data
+            print(f"{symbol} Tick - Bid: {bid}, Ask: {ask}, Mid: {mid_price}")
+
+            # Append live prices to the symbol's data list
+            price_data[symbol].append(mid_price)
+
+            # Maintain a rolling 15-second window
+            price_data[symbol] = price_data[symbol][-15:]
+
+            # After 15 seconds, initialize the first candle
+            if current_time - start_time >= timedelta(seconds=15):
+                if len(candles) == 0:  # First candle
+                    candle = initialize_candle(symbol, current_time)
+                    candles.append(candle)
+                    print(f"Initialized candle: {candle}")
+                else:
+                    # Create a new candle for every 15 seconds
+                    open_price = price_data[symbol][0]
+                    high_price = max(price_data[symbol])
+                    low_price = min(price_data[symbol])
+                    close_price = price_data[symbol][-1]
+
+                    candle = {
+                        "timestamp": int(current_time.timestamp()),
+                        "symbol": symbol,
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price
+                    }
+                    candles.append(candle)
+                    print(f"New candle: {candle}")
+                    delta = (close_price - bid)
+                    detlapercentage = delta / close_price * 100
+                    print(detlapercentage)
+
+                # Save candle data to CSV for the specific symbol
+                save_to_csv([candle], symbol)
+
+                # Access and print the CSV file just after saving it
+                print(f"Reading CSV file: {symbol}_ohlc_data.csv")
+                df = pd.read_csv(f"{symbol}_ohlc_data.csv")  # Using pandas to read the CSV file
+                print(df.tail(2))  # Print the last few rows of the CSV file
+
+                # Reset data for the next 15-second window
+                price_data[symbol] = []
+
+                # Reset the start time for the next window
+                start_time = current_time
+
+        # Sleep for a short interval to avoid excessive CPU usage
+        time.sleep(1)
+
+
+except KeyboardInterrupt:
+    print("Exiting gracefully...")
+    mt5.shutdown()
+except Exception as e:
+    print(f"Unexpected error: {e}")
+    mt5.shutdown()

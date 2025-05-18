@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Live Data - Candlestick Charts</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <header>
+        <h1>Binance Live Data - Candlestick Charts</h1>
+    </header>
+
+    <div class="charts-container">
+        <!-- BTC 15m -->
+        <div class="chart-group">
+            <div class="percentage-display" id="percentage-display-btc-15m">
+                BTC 15m Percentage Change: --
+            </div>
+            <div class="chart-container" id="btc-15m-chart-container"></div>
+        </div>
+    
+        <!-- BTC 1h -->
+        <div class="chart-group">
+            <div class="percentage-display" id="percentage-display-btc-1h">
+                BTC 1h Percentage Change: --
+            </div>
+            <div class="chart-container" id="btc-1h-chart-container"></div>
+        </div>
+    
+        <!-- ETH 15m -->
+        <div class="chart-group">
+            <div class="percentage-display" id="percentage-display-eth-15m">
+                ETH 15m Percentage Change: --
+            </div>
+            <div class="chart-container" id="eth-15m-chart-container"></div>
+        </div>
+    
+        <!-- ETH 1h -->
+        <div class="chart-group">
+            <div class="percentage-display" id="percentage-display-eth-1h">
+                ETH 1h Percentage Change: --
+            </div>
+            <div class="chart-container" id="eth-1h-chart-container"></div>
+        </div>
+
+        <!-- Helix 15m Display -->
+        <div class="helix-display" id="helix-display-15m">
+            Helix 15m: --
+        </div>
+
+        <!-- Helix 1h Display -->
+        <div class="helix-display" id="helix-display-1h">
+            Helix 1h: --
+        </div>
+    </div>
+
+    <script src="charts.js"></script>
+</body>
+</html>

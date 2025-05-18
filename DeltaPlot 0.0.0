@@ -1,0 +1,176 @@
+import MetaTrader5 as mt5
+import pandas as pd
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+import numpy as np
+
+# Initialize MT5 connection
+def initialize_mt5(account_no, password, server):
+    if not mt5.initialize(login=account_no, server=server, password=password):
+        print("Failed to initialize MT5, error code:", mt5.last_error())
+        return False
+    print("MT5 connection established successfully.")
+    return True
+
+# Function to fetch historical data
+def fetch_data(symbol, start_time, end_time):
+    print(f"Fetching data for {symbol} from {start_time} to {end_time}...")
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_time, end_time)
+
+    if rates is None:
+        print(f"Error fetching data for {symbol}: {mt5.last_error()}")
+        return None
+
+    if len(rates) == 0:
+        print(f"No data found for {symbol}.")
+        return None
+
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    print(f"Fetched {len(df)} data points for {symbol}.")
+    return df
+
+# Function to calculate percentage difference between previous and current candle
+def calculate_percentage_difference_previous_candle(df):
+    df['prev_pct_diff'] = df['close'].pct_change(periods=1) * 100  # Convert to percentage
+    return df
+
+# Responsive chart with Plotly for percentage difference
+def plot_percentage_difference(percentage_data, symbols):
+    fig = go.Figure()
+
+    for symbol, prev_pct_diff in percentage_data.items():
+        fig.add_trace(go.Scatter(
+            x=prev_pct_diff.index,
+            y=prev_pct_diff,
+            mode='lines',
+            name=f'{symbol} Previous Candle % Difference'
+        ))
+
+    # Set titles and layout for percentage difference chart
+    fig.update_layout(
+        title=f'Percentage Difference between Previous and Current Candle ({symbols[0]} vs {symbols[1]})',
+        xaxis_title='Time',
+        yaxis_title='Percentage Change (%)',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        template='plotly_white'
+    )
+
+    print("Displaying the interactive Plotly chart for percentage difference.")
+    fig.show()
+
+# Function to plot the difference between two symbols using points and lines with evolving sine wave
+def plot_difference_between_symbols_points(percentage_data, symbols):
+    symbol1_diff = percentage_data[symbols[0]]
+    symbol2_diff = percentage_data[symbols[1]]
+    difference = symbol1_diff - symbol2_diff
+
+    # Create the figure for both Scatter and Line charts
+    fig = go.Figure()
+
+    # Scatter Plot (markers)
+    fig.add_trace(go.Scatter(
+        x=difference.index,
+        y=difference,
+        mode='markers',
+        name=f'Difference Points ({symbols[0]} - {symbols[1]})'
+    ))
+
+    # Line Plot (lines)
+    fig.add_trace(go.Scatter(
+        x=difference.index,
+        y=difference,
+        mode='lines',
+        name=f'Difference Line ({symbols[0]} - {symbols[1]})',
+        line=dict(color='blue')
+    ))
+
+    # Time in hours for continuous evolution
+    time_in_hours = (difference.index - difference.index[0]).total_seconds() / 3600  # Time in hours
+
+    # Normalize the difference data for smoother sine waves
+    frequency_factor = np.abs(difference) / np.max(np.abs(difference))  # Normalize between 0 and 1
+    amplitude_factor = 0.3 * (1 + frequency_factor)  # Gradual increase in amplitude based on difference
+
+    # Initialize sine wave with a phase that continuously evolves
+    phase_factor = time_in_hours * 0.05  # Slow phase progression to evolve the wave over time
+
+    # Generate sine wave with dynamic frequency and amplitude
+    sine_wave = amplitude_factor * np.sin(2 * np.pi * phase_factor * (1 + frequency_factor))
+
+    # Add the sine wave to the plot
+    fig.add_trace(go.Scatter(
+        x=difference.index,
+        y=sine_wave,
+        mode='lines',
+        name='Sine Wave (Dynamic Frequency & Amplitude)',
+        line=dict(color='red', width=2)
+    ))
+
+    # Set titles and layout for the difference points chart
+    fig.update_layout(
+        title=f'Difference between {symbols[0]} and {symbols[1]} (Points & Line)',
+        xaxis_title='Time',
+        yaxis_title='Difference (%)',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        yaxis=dict(autorange=True),
+        template='plotly_white'
+    )
+
+    print("Displaying the interactive Plotly chart with Scatter and Line plots for the difference between symbols.")
+    fig.show()
+
+# Main execution
+if __name__ == "__main__":
+    # Manually set your credentials here
+    account_no = 190669726  # Replace with your actual account number
+    password = "Password@69"  # Replace with your actual password
+    server = "Exness-MT5Trial14"  # Replace with your actual server
+
+    if not initialize_mt5(account_no, password, server):
+        quit()
+
+    # Define symbols and time range
+    symbols = ["BTCUSD", "ETHUSD"]
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=10)  # Fetch data for the last 200 days
+
+    # Create a list to hold data for percentage difference plotting
+    percentage_data = {}
+
+    for symbol in symbols:
+        data = fetch_data(symbol, start_time, end_time)
+        if data is not None:
+            # Calculate percentage difference between previous and current candle
+            data = calculate_percentage_difference_previous_candle(data)
+            percentage_data[symbol] = data['prev_pct_diff']
+
+    # Plot percentage difference chart
+    plot_percentage_difference(percentage_data, symbols)
+
+    # Plot difference between symbols using points
+    plot_difference_between_symbols_points(percentage_data, symbols)
+
+    # Shutdown MT5 connection
+    mt5.shutdown()

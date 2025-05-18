@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Helix Data Candlestick Charts</title>
+    <script src="https://unpkg.com/lightweight-charts@3.4.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        /* Ensure charts fit within the screen */
+        #chart15m, #chart1h {
+            width: 100%;
+            height: 45vh; /* Set height as a percentage of viewport height */
+            margin-bottom: 20px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>15-Minute Timeframe Chart</h2>
+        <div id="chart15m"></div>
+        <h2>1-Hour Timeframe Chart</h2>
+        <div id="chart1h"></div>
+    </div>
+
+    <script>
+        // Create the 15-minute timeframe chart
+        const chart15m = LightweightCharts.createChart(document.getElementById('chart15m'), {
+            width: document.getElementById('chart15m').clientWidth,
+            height: document.getElementById('chart15m').clientHeight,
+            autoScale: true,
+            candlestick: true,
+        });
+
+        const candlestickSeries15m = chart15m.addCandlestickSeries();
+        const movingAverageSeries15m = chart15m.addLineSeries({
+            color: 'red', // Color of the moving average line
+            lineWidth: 2,
+        });
+
+        // Add the zero line
+        const zeroLineSeries15m = chart15m.addLineSeries({
+            color: 'gray', // Color of the zero line
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+        });
+
+        // Create the 1-hour timeframe chart
+        const chart1h = LightweightCharts.createChart(document.getElementById('chart1h'), {
+            width: document.getElementById('chart1h').clientWidth,
+            height: document.getElementById('chart1h').clientHeight,
+            autoScale: true,
+            candlestick: true,
+        });
+
+        const candlestickSeries1h = chart1h.addCandlestickSeries();
+        const movingAverageSeries1h = chart1h.addLineSeries({
+            color: 'blue', // Color of the moving average line
+            lineWidth: 2,
+        });
+
+        // Add the zero line
+        const zeroLineSeries1h = chart1h.addLineSeries({
+            color: 'gray', // Color of the zero line
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+        });
+
+        // Fetch data from the Flask API
+        const fetchData = async () => {
+            try {
+                const response = await fetch('/get_candlestick_data');
+                const data = await response.json();
+
+                console.log("Raw Candlestick Data (15m):", data.candlestick_data_15m);
+                console.log("Raw Candlestick Data (1h):", data.candlestick_data_1h);
+
+                if (data.candlestick_data_15m && Array.isArray(data.candlestick_data_15m) && data.candlestick_data_15m.length > 0) {
+                    const validData15m = data.candlestick_data_15m.filter(item =>
+                        item.time && item.open && item.high && item.low && item.close
+                    );
+                    candlestickSeries15m.setData(validData15m);
+
+                    // Add the moving average data to the chart
+                    const maData15m = validData15m.map(item => ({ time: item.time, value: item.sma }));
+                    movingAverageSeries15m.setData(maData15m);
+
+                    // Add the zero line data (flat line at zero)
+                    const zeroLineData15m = validData15m.map(item => ({ time: item.time, value: 0 }));
+                    zeroLineSeries15m.setData(zeroLineData15m);
+                } else {
+                    console.error('Invalid data format or empty data for 15m received');
+                }
+
+                if (data.candlestick_data_1h && Array.isArray(data.candlestick_data_1h) && data.candlestick_data_1h.length > 0) {
+                    const validData1h = data.candlestick_data_1h.filter(item =>
+                        item.time && item.open && item.high && item.low && item.close
+                    );
+                    candlestickSeries1h.setData(validData1h);
+
+                    // Add the moving average data to the chart
+                    const maData1h = validData1h.map(item => ({ time: item.time, value: item.sma }));
+                    movingAverageSeries1h.setData(maData1h);
+
+                    // Add the zero line data (flat line at zero)
+                    const zeroLineData1h = validData1h.map(item => ({ time: item.time, value: 0 }));
+                    zeroLineSeries1h.setData(zeroLineData1h);
+                } else {
+                    console.error('Invalid data format or empty data for 1h received');
+                }
+
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        };
+
+        // Fetch data initially
+        fetchData();
+
+        // Optionally, you can set up an interval to periodically refresh the data
+        setInterval(fetchData, 60); // Refresh every minute
+    </script>
+
+</body>
+</html>
